@@ -1,0 +1,10 @@
+1.water proof vesel
+2.propeller system
+3.variable balast system
+4.sensor system
+5.RC
+6.data transmition and storrage
+
+
+OPTIONAL:
+accelerometr based space mapping
