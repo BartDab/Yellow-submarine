@@ -1,10 +1,11 @@
-1.water proof vesel
+1.water proof vessel
 2.propeller system
-3.variable balast system
+3.variable ballast system
 4.sensor system
 5.RC
-6.data transmition and storrage
+6.data transmission (optional storage)
 
 
 OPTIONAL:
-accelerometr based space mapping
+accelerometer/GPS based space mapping with inclusion of water quality
+labVIEW enhanced control and data analysis
