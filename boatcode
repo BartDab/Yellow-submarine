@@ -1,0 +1,282 @@
+/*-------------------------------------------------------------------------
+					Design Laboratory - Team 7.4
+					Project: Yellow Submarine
+					author: Bartłomiej Dąbrowski, Patryk Serwatka
+					version: 25.11.2026.
+----------------------------------------------------------------------------*/
+
+#include <SPI.h>
+#include <RadioLib.h>
+#include <WiFi.h>
+
+// Comunication PINS
+#define PIN_SCK   2
+#define PIN_MISO  42
+#define PIN_MOSI  5
+#define PIN_CS    4
+#define PIN_GDO0  1
+#define PIN_GDO2  6
+//GPS PINS
+#define RXD2 18 
+#define TXD2 17 
+#define GPS_BAUD 9600
+//engine PINS
+#define ENG_PROP1_1 46
+#define ENG_PROP1_2 9
+#define ENG_PROP2_1 10
+#define ENG_PROP2_2 11
+#define ENG_SUB_1 12
+#define ENG_SUB_2 13
+//TDS PINS and SAMPLE number
+#define TDS_PIN 14
+#define SAMPLES 30
+
+HardwareSerial gpsSerial(2);
+
+//some global variables needed in our program
+uint16_t limit = 0;
+unsigned long lastOrder = 0;
+unsigned long lastOrderV = 0;
+unsigned long lastOrderH = 0;
+const unsigned long TIMEOUT_MS1 = 30000; // 10s of no contact 
+const unsigned long TIMEOUT_MS2 = 500; // 0.5s of no contact
+uint16_t analogBuff[SAMPLES];
+
+
+SPISettings spiSettings(4000000, MSBFIRST, SPI_MODE0); //spi settings
+CC1101 radio = new Module(PIN_CS, PIN_GDO0, RADIOLIB_NC, PIN_GDO2, SPI, spiSettings); //connection settings
+
+volatile bool packetRecieved = false;
+
+//Median for TDS sensor
+int getMedian(uint16_t buff[], uint8_t len){
+  int buffCopy[len];
+  for(int i = 0; i < len; i++){
+    buffCopy[i] = buff[i];
+  }
+  int helpVariable, median;
+  for(int i = 0; i < len - 1 ; i++){  //simple sorting algorythm 
+    for(int j = 0; j< len - i - 1; j++){
+      if(buffCopy[j] > buffCopy[j+1]){
+        helpVariable = buffCopy[j];
+        buffCopy[j] = buffCopy[j+1];
+        buffCopy[j+1] = helpVariable;
+      }
+    }
+  }
+  if(len % 2 == 1){
+    median = buffCopy[(len - 1) / 2];
+  } else {
+    median = (buffCopy[(len/2)] + buffCopy[(len/2)-1])/2;
+  }
+  return median;
+}
+
+//controll functions - vetical
+
+void goingDown(uint16_t* limit){
+        digitalWrite(ENG_SUB_1,HIGH);
+        digitalWrite(ENG_SUB_2,LOW); 
+        (*limit)++; //needed, so we dont overfill our watertank
+}
+
+void goingUp(uint16_t* limit){
+        digitalWrite(ENG_SUB_2,HIGH);
+        digitalWrite(ENG_SUB_1,LOW);  
+        if (*limit > 0) (*limit)--;
+}
+
+void stopVertical(){
+        digitalWrite(ENG_SUB_2,LOW);
+        digitalWrite(ENG_SUB_1,LOW);  
+}
+
+//controll functions - horizontal
+
+void rightTurn(){
+        digitalWrite(ENG_PROP1_1,HIGH);
+        digitalWrite(ENG_PROP1_2,LOW);  
+        digitalWrite(ENG_PROP2_1,LOW);
+        digitalWrite(ENG_PROP2_2,HIGH);          
+}
+void leftTurn(){
+        digitalWrite(ENG_PROP1_1,LOW);
+        digitalWrite(ENG_PROP1_2,HIGH);  
+        digitalWrite(ENG_PROP2_1,HIGH);
+        digitalWrite(ENG_PROP2_2,LOW);          
+}
+void forward(){
+        digitalWrite(ENG_PROP1_1,HIGH);
+        digitalWrite(ENG_PROP1_2,LOW);  
+        digitalWrite(ENG_PROP2_1,HIGH);
+        digitalWrite(ENG_PROP2_2,LOW);          
+}
+void back(){
+        digitalWrite(ENG_PROP1_1,LOW);
+        digitalWrite(ENG_PROP1_2,HIGH);  
+        digitalWrite(ENG_PROP2_1,LOW);
+        digitalWrite(ENG_PROP2_2,HIGH);          
+}
+void stopHorizontal(){
+        digitalWrite(ENG_PROP1_1,LOW);
+        digitalWrite(ENG_PROP1_2,LOW);  
+        digitalWrite(ENG_PROP2_1,LOW);
+        digitalWrite(ENG_PROP2_2,LOW);       
+}
+
+void IRAM_ATTR setFlag() {
+  packetRecieved = true;
+}
+
+void setup() {
+  //closing unneeded wifi connection
+  WiFi.mode(WIFI_OFF);
+  btStop();
+
+  //seting up TDS
+  analogSetPinAttenuation(TDS_PIN, ADC_11db);
+
+  //seting up GPS
+  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);
+  Serial.println("Serial 2 started at 9600 baud rate");
+
+  //changing pin mode for engines
+  pinMode(ENG_PROP1_1, OUTPUT);
+  pinMode(ENG_PROP1_2, OUTPUT);
+  pinMode(ENG_PROP2_1, OUTPUT);
+  pinMode(ENG_PROP2_2, OUTPUT);
+  pinMode(ENG_SUB_1, OUTPUT);
+  pinMode(ENG_SUB_2, OUTPUT);  
+  stopVertical();
+  stopHorizontal();
+
+  //serial only meant for checking purpouse, will be commented in working program
+  Serial.begin(115200);
+  delay(2000);
+  SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, PIN_CS);
+
+  // radio start with base parameters, like 433MHz etc.
+  int state = radio.begin();
+  if (state == RADIOLIB_ERR_NONE) {
+    radio.variablePacketLengthMode();
+    radio.setCrcFiltering(true);
+    Serial.println("ESP32-S3 ready! insert message:");
+  } else {
+    Serial.print("start error, code: ");
+    Serial.println(state);
+    while (true) { delay(100); }
+  }
+  radio.setGdo0Action(setFlag, RISING);
+  radio.startReceive();
+}
+
+void loop() {
+
+  // Sending part
+  if (Serial.available() > 0) {
+    // getting GPS information
+    //   while (gpsSerial.available() > 0){ 
+    //   char gpsData = gpsSerial.read();
+    //   Serial.print(gpsData);
+    // }
+
+    //getting sensor reading
+    // for (int i = 0; i < SAMPLES; i++){
+    //   analogBuff[i] = analogReadMilliVolts(TDS_PIN);
+    //   delay(1);
+    // }
+    // float voltage = getMedian(analogBuff,SAMPLES)/1000.0;
+    // float tdsValue = (133.42 * pow(voltage, 3) - 255.86 * pow(voltage, 2) + 857.39 * voltage) * 0.5;
+    // if (tdsValue < 0) tdsValue = 0;
+
+
+    String text = Serial.readStringUntil('\n');
+    text.trim();
+
+    if (text.length() > 0 && text.length() < 60) {
+
+      Serial.print("Sending: ");
+      Serial.print(text);
+      Serial.print(" -> ");
+
+      radio.clearGdo0Action();
+      radio.standby();
+      delay(10);
+
+      uint8_t bufor[64] = {0};
+      size_t len = text.length();
+      memcpy(bufor, text.c_str(), len);
+
+      int state = radio.transmit(bufor, len);
+      if (state == RADIOLIB_ERR_NONE) {
+        Serial.println("OK!");
+      } else {
+        Serial.print("error TX: ");
+        Serial.println(state);
+        radio.standby();
+        delay(10);
+      }
+
+      packetRecieved = false;
+      radio.setGdo0Action(setFlag, RISING);
+      radio.startReceive();
+    }
+  }
+
+  // recieving
+  if (packetRecieved) {
+    packetRecieved = false;
+    String recieved;
+    int state = radio.readData(recieved);
+
+    if (state == RADIOLIB_ERR_NONE && recieved.length() > 0) {
+      lastOrder = millis();
+      //serial part only meant for connection checks
+      Serial.print("Receved: ");
+      Serial.print(recieved);
+      Serial.print(" | RSSI: ");
+      Serial.print(radio.getRSSI());
+      Serial.println(" dBm");
+
+      if(recieved == "down" && limit <= 4000){
+        goingDown(&limit);
+        lastOrderV = millis();
+      }else if(recieved == "up" && limit > 0){
+        goingUp(&limit);
+        lastOrderV = millis();
+      }
+
+      if(recieved == "forward"){
+        forward();
+        lastOrderH = millis();
+      }else if(recieved == "back"){
+        back();
+        lastOrderH = millis();
+      }else if(recieved == "right"){
+        rightTurn();
+        lastOrderH = millis();
+      }else if(recieved == "left"){
+        leftTurn();
+        lastOrderH = millis();
+      }
+
+    }
+
+    radio.startReceive();
+  }
+
+  if(millis() - lastOrder > TIMEOUT_MS1){ //it doesn't use H and V variants, so checks all kind of messages
+      if(limit>0){
+        goingUp(&limit); //unsubmerge if no connection
+      } else {
+        stopVertical();
+      }
+  } else {
+    if(millis() - lastOrderV > TIMEOUT_MS2){
+      stopVertical(); //stops boat from going idly until next message
+    }
+    if(millis() - lastOrderH > TIMEOUT_MS2){
+      stopHorizontal();
+    }
+  }
+}
