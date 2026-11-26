@@ -38,7 +38,7 @@ uint16_t limit = 0;
 unsigned long lastOrder = 0;
 unsigned long lastOrderV = 0;
 unsigned long lastOrderH = 0;
-const unsigned long TIMEOUT_MS1 = 30000; // 10s of no contact 
+const unsigned long TIMEOUT_MS1 = 30000; // 30s of no contact 
 const unsigned long TIMEOUT_MS2 = 500; // 0.5s of no contact
 uint16_t analogBuff[SAMPLES];
 
@@ -74,16 +74,24 @@ int getMedian(uint16_t buff[], uint8_t len){
 
 //controll functions - vetical
 
-void goingDown(uint16_t* limit){
-        digitalWrite(ENG_SUB_1,HIGH);
-        digitalWrite(ENG_SUB_2,LOW); 
-        (*limit)++; //needed, so we dont overfill our watertank
+void goingDown(uint16_t* limit) {
+        static unsigned long lastTick = 0;
+        digitalWrite(ENG_SUB_1, HIGH);
+        digitalWrite(ENG_SUB_2, LOW);
+        if (millis() - lastTick >= 10) {
+          (*limit)++;
+          lastTick = millis();
+        }
 }
 
-void goingUp(uint16_t* limit){
-        digitalWrite(ENG_SUB_2,HIGH);
-        digitalWrite(ENG_SUB_1,LOW);  
-        if (*limit > 0) (*limit)--;
+void goingUp(uint16_t* limit) {
+        static unsigned long lastTick = 0;
+        digitalWrite(ENG_SUB_2, HIGH);
+        digitalWrite(ENG_SUB_1, LOW);
+        if (millis() - lastTick >= 10 && *limit > 0) {
+          (*limit)--;
+          lastTick = millis();
+        }
 }
 
 void stopVertical(){
